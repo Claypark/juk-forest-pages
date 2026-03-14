@@ -351,39 +351,35 @@ function showLogin() {
 }
 
 // ─── EDGE FUNCTION CALL ──────────────────────────────
-async function callEdgeFunction(fnName, body) {
+async function callEdgeFunction(fnName, body, method = 'POST') {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error('로그인이 필요합니다');
 
-  const res = await fetch(`${FUNCTIONS_URL}/${fnName}`, {
-    method: 'POST',
+  const opts = {
+    method,
     headers: {
       'Content-Type': 'application/json',
       'x-app-key': APP_KEY,
       'Authorization': `Bearer ${session.access_token}`,
     },
-    body: JSON.stringify(body),
-  });
+  };
+  if (body && method !== 'GET') opts.body = JSON.stringify(body);
 
+  const res = await fetch(`${FUNCTIONS_URL}/${fnName}`, opts);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
 
-// ─── CONFIG (Firestore) ──────────────────────────────
+// ─── CONFIG (via Supabase Edge Function) ─────────────
 async function loadConfig() {
   try {
-    const snap = await getDoc(doc(db, 'admin', 'bamboo_config'));
-    if (!snap.exists()) {
-      $promptTemplate.value = DEFAULT_PROMPT;
-      return;
-    }
-    const d = snap.data();
+    const d = await callEdgeFunction('bamboo-config', null, 'GET');
     $autoEnabled.checked = d.enabled ?? false;
     $autoInterval.value = String(d.intervalMinutes ?? 30);
     $promptTemplate.value = d.promptTemplate ?? DEFAULT_PROMPT;
     if (d.lastPostAt) {
-      $lastPostTime.textContent = '마지막 포스팅: ' + fmtDate(d.lastPostAt.toDate());
+      $lastPostTime.textContent = '마지막 포스팅: ' + fmtDate(new Date(d.lastPostAt));
     }
     $totalGenerated.textContent = '총 생성: ' + (d.totalGenerated ?? 0) + '개';
   } catch (e) {
@@ -394,11 +390,11 @@ async function loadConfig() {
 
 document.getElementById('saveConfigBtn').addEventListener('click', async () => {
   try {
-    await setDoc(doc(db, 'admin', 'bamboo_config'), {
+    await callEdgeFunction('bamboo-config', {
       enabled: $autoEnabled.checked,
       intervalMinutes: parseInt($autoInterval.value),
       promptTemplate: $promptTemplate.value,
-    }, { merge: true });
+    });
     showToast('설정이 저장되었습니다');
   } catch (e) {
     showToast('저장 실패: ' + e.message, true);
